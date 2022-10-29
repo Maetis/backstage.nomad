@@ -37,7 +37,7 @@ nomad var put @spec.nv.hcl
 
 ### Creating a PostgreSQL persistent volume
 In order to persist PostgreSQL data we will create a [host volume](https://developer.hashicorp.com/nomad/docs/configuration/client#host_volume-stanza),
-maybe in a production scenario a [CSI volume](https://developer.hashicorp.com/nomad/docs/commands/volume/register) will be more appropriate.
+maybe in a production scenario a [CSI volume](https://developer.hashicorp.com/nomad/docs/commands/volume/register) will be more appropriate. Modify the configuration file of the client node as follow:
 ```
 client {
     host_volume "postgres" {
@@ -45,4 +45,74 @@ client {
         read_only = false
     }    
 }
+```
+
+### Creating a PostgreSQL deployment
+Now we can create a Nomad job for the PostgreSQL database deployment itself:
+```
+job "postgres" {
+ 	datacenters = ["dc1"]
+  namespace = "backstage"
+  type = "service"
+  
+  group "backstage-db" {
+   	count = 1
+    
+    network {
+     	mode = "host"
+      port "db" {
+       	static = 5432
+        to = 5432
+      }
+    }
+    
+    volume "postgres" {
+      type      = "host"
+      read_only = false
+      source    = "postgres"
+    }
+    
+    task "backstage-db" {
+     	service {
+        name = "database"
+        provider = "nomad"
+        port = "db"
+      }
+      
+      volume_mount {
+        volume      = "postgres"
+        destination = "/var/lib/postgresql/data"
+        read_only   = false
+      }
+      
+      driver = "docker"
+      
+      config {
+        image = "postgres:13.2-alpine"
+        ports = ["db"]
+      }
+      
+      template {
+        destination = "${NOMAD_SECRETS_DIR}/env.vars"
+        env         = true
+        change_mode = "restart"
+        data        = <<EOF
+{{- with nomadVar "nomad/jobs" -}}
+POSTGRES_USER = {{ .postgres_user }}
+POSTGRES_PASSWORD = {{ .postgres_password }}
+{{- end -}}
+EOF
+     }
+    } 
+  }
+}
+```
+
+Apply the PostgreSQL deployment to the Kubernetes cluster:
+```
+$ nomad run postgres.hcl
+
+$ nomad job status -namespace=backstage
+ID        Type     Priority  Status   Submit Date
+postgres  service  50        running  2022-10-28T21:35:15-04:00
 ```
